@@ -4,7 +4,7 @@ from operator import attrgetter
 from typing import List, Tuple, Any, Dict
 from elasticsearch_dsl import Search, connections, Q
 from elasticsearch.exceptions import NotFoundError
-from six.moves import urllib
+import urllib.parse
 import ast
 
 from mlflow.store.tracking.abstract_store import AbstractStore
@@ -13,10 +13,12 @@ from mlflow.protos.databricks_pb2 import (
     INVALID_PARAMETER_VALUE, INVALID_STATE, INTERNAL_ERROR, RESOURCE_DOES_NOT_EXIST)
 from mlflow.entities import (Experiment, RunTag, Metric, Param, Run, RunInfo, RunData,
                              RunStatus, ExperimentTag, LifecycleStage, ViewType)
+
 try:
     from mlflow.entities import Columns
 except ImportError:
     pass
+
 from mlflow.exceptions import MlflowException
 from mlflow.utils.uri import append_to_uri_path
 from mlflow.utils.search_utils import SearchUtils
@@ -57,7 +59,7 @@ class ElasticsearchStore(AbstractStore):
         ElasticExperiment.init()
         ElasticRun.init()
         ElasticMetric.init()
-        super(ElasticsearchStore, self).__init__()
+        super().__init__()
 
     def _hit_to_mlflow_experiment(self, hit: Any) -> Experiment:
         return Experiment(experiment_id=hit.meta.id, name=hit.name,
@@ -82,15 +84,15 @@ class ElasticsearchStore(AbstractStore):
 
     def _hit_to_mlflow_run_data(self, hit: Any, columns_to_whitelist_key_dict: dict) -> RunData:
         metrics = [self._hit_to_mlflow_metric(m) for m in
-                   (hit.latest_metrics if hasattr(hit, 'latest_metrics') else[])
+                   (hit.latest_metrics if hasattr(hit, 'latest_metrics') else [])
                    if (columns_to_whitelist_key_dict is None or
                        m.key in columns_to_whitelist_key_dict["metrics"])]
         params = [self._hit_to_mlflow_param(p) for p in
-                  (hit.params if hasattr(hit, 'params') else[])
+                  (hit.params if hasattr(hit, 'params') else [])
                   if (columns_to_whitelist_key_dict is None or
                       p.key in columns_to_whitelist_key_dict["params"])]
         tags = [self._hit_to_mlflow_tag(t) for t in
-                (hit.tags if hasattr(hit, 'tags') else[])
+                (hit.tags if hasattr(hit, 'tags') else [])
                 if (columns_to_whitelist_key_dict is None or
                     t.key in columns_to_whitelist_key_dict["tags"])]
         return RunData(metrics=metrics, params=params, tags=tags)
@@ -253,7 +255,7 @@ class ElasticsearchStore(AbstractStore):
                 latest_metric_exist = True
                 if _compare_metrics(new_latest_metric, latest_metric):
                     run.latest_metrics[i] = new_latest_metric
-        if not (latest_metric_exist):
+        if not latest_metric_exist:
             run.latest_metrics.append(new_latest_metric)
 
     def _log_metric(self, run: ElasticRun, metric: Metric) -> None:
