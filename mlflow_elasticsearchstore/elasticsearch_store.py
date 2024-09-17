@@ -421,35 +421,61 @@ class ElasticsearchStore(AbstractStore):
         sort_clauses.append({"run_id": {'order': "asc"}})
         return sort_clauses
 
-    def _search_runs(self, experiment_ids: List[str], filter_string: str,
-                     run_view_type: str, max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
-                     order_by: List[str] = None, page_token: str = None,
-                     columns_to_whitelist: List[str] = None) -> Tuple[List[Run], str]:
+def _search_runs(self, experiment_ids: List[str], filter_string: str,
+                 run_view_type: str, max_results: int = SEARCH_MAX_RESULTS_DEFAULT,
+                 order_by: List[str] = None, page_token: str = None,
+                 columns_to_whitelist: List[str] = None) -> Tuple[List[Run], str]:
 
-        if max_results > 10000:
-            raise MlflowException("Invalid value for request parameter max_results. It must be at "
-                                  "most {}, but got value {}"
-                                  .format(10000, max_results),
-                                  INVALID_PARAMETER_VALUE)
-        stages = LifecycleStage.view_type_to_stages(run_view_type)
-        parsed_filters = SearchUtils.parse_search_filter(filter_string)
-        filter_queries = [Q("match", experiment_id=experiment_ids[0]),
-                          Q("terms", lifecycle_stage=stages)]
-        filter_queries += self._build_elasticsearch_query(parsed_filters)
-        sort_clauses = self._get_orderby_clauses(order_by)
-        s = Search(index="mlflow-runs").query('bool', filter=filter_queries)
-        s = s.sort(*sort_clauses)
-        if page_token != "" and page_token is not None:
-            s = s.extra(search_after=ast.literal_eval(page_token))
+    if max_results > 10000:
+        raise MlflowException("Invalid value for request parameter max_results. It must be at "
+                              "most {}, but got value {}".format(10000, max_results),
+                              INVALID_PARAMETER_VALUE)
+
+    stages = LifecycleStage.view_type_to_stages(run_view_type)
+    parsed_filters = SearchUtils.parse_search_filter(filter_string)
+    filter_queries = [Q("match", experiment_id=experiment_ids[0]),
+                      Q("terms", lifecycle_stage=stages)]
+    filter_queries += self._build_elasticsearch_query(parsed_filters)
+    sort_clauses = self._get_orderby_clauses(order_by)
+
+    s = Search(index="mlflow-runs").query('bool', filter=filter_queries).sort(*sort_clauses)
+
+    if page_token != "" and page_token is not None:
+        s = s.extra(search_after=ast.literal_eval(page_token))
+
+    # Execute the query and handle potential errors
+    try:
         response = s.params(size=max_results).execute()
-        columns_to_whitelist_key_dict = self._build_columns_to_whitelist_key_dict(
-            columns_to_whitelist)
-        runs = [self._hit_to_mlflow_run(hit, columns_to_whitelist_key_dict) for hit in response]
-        if len(runs) == max_results:
-            next_page_token = response.hits.hits[-1].sort
+    except Exception as e:
+        raise MlflowException(f"Elasticsearch query failed: {e}", INTERNAL_ERROR)
+
+    # Log the response for debugging
+    print("Elasticsearch Response:", response.to_dict())
+
+    # Validate if we received a proper response and hits are present
+    if not response or not response.hits or not response.hits.hits:
+        print("No hits found or invalid response format")
+        return [], ""
+
+    columns_to_whitelist_key_dict = self._build_columns_to_whitelist_key_dict(columns_to_whitelist)
+
+    # Ensure we only iterate over valid hits
+    runs = []
+    for hit in response.hits.hits:
+        if hit is not None:
+            run = self._hit_to_mlflow_run(hit, columns_to_whitelist_key_dict)
+            if run:  # Ensure no invalid NoneType objects are added
+                runs.append(run)
         else:
-            next_page_token = []
-        return runs, str(next_page_token)
+            print("Warning: Received None hit in response")
+
+    # Check if we need to paginate
+    if len(runs) == max_results:
+        next_page_token = response.hits.hits[-1].sort
+    else:
+        next_page_token = []
+
+    return runs, str(next_page_token)
 
     def update_artifacts_location(self, run_id: str, new_artifacts_location: str) -> None:
         run = self._get_run(run_id=run_id)
